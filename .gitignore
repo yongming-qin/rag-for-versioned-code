@@ -224,4 +224,6 @@ Thumbs.db
 # APIDocs.json  # If this contains sensitive data
 # *.db
 # *.sqlite
-# *.sqlite3 
+# *.sqlite3
+
+yq/chroma_db/
