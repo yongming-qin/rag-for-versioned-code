@@ -212,38 +212,87 @@ def select_embeddings_model(model="OpenAI"):
 # CORE RAG DOCUMENT RETRIEVAL FUNCTION
 # =============================================================================
 
-def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='OpenAI') -> str:
-    """
-    Retrieve relevant API documentation using RAG (Retrieval-Augmented Generation).
-    
-    This function implements the core RAG pipeline:
-    1. Load and process API documentation from JSON files
-    2. Split documents into manageable chunks
-    3. Create or load vector embeddings in Chroma database
-    4. Perform similarity search to find relevant documentation
-    5. Generate a contextual response using the retrieved documents
-    
-    Args:
-        query (str): The search query to find relevant API documentation
-        embedding_model (str): The embedding model provider to use
-        chat_model (str): The chat model provider to use for response generation
-        
-    Returns:
-        str: Generated response based on retrieved relevant documentation
-        
-    Note:
-        The function uses a persistent Chroma database to avoid re-embedding
-        documents on subsequent calls, improving performance significantly.
-    """
-    from pprint import pprint
-    
-    # Import required LangChain components
-    from langchain_community.document_loaders import JSONLoader
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_chroma import Chroma
-    from langchain.prompts import ChatPromptTemplate
+from pprint import pprint
 
-    def metadata_func(record: dict, metadata: dict) -> dict:
+# Import required LangChain components
+from langchain_community.document_loaders import JSONLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain.prompts import ChatPromptTemplate
+
+"""
+Retrieve relevant API documentation using RAG (Retrieval-Augmented Generation).
+
+This function implements the core RAG pipeline:
+1. Load and process API documentation from JSON files
+2. Split documents into manageable chunks
+3. Create or load vector embeddings in Chroma database
+4. Perform similarity search to find relevant documentation
+5. Generate a contextual response using the retrieved documents
+
+Args:
+    query (str): The search query to find relevant API documentation
+    embedding_model (str): The embedding model provider to use
+    chat_model (str): The chat model provider to use for response generation
+    
+Returns:
+    str: Generated response based on retrieved relevant documentation
+    
+Note:
+    The function uses a persistent Chroma database to avoid re-embedding
+    documents on subsequent calls, improving performance significantly.
+"""
+class RagDocument:
+    def __init__(self, embedding_model="OpenAI", chat_model='OpenAI'):
+        # Load API documentation from JSON file
+        # file_path is the path to the API documentation JSON file
+        loader = JSONLoader(
+            file_path="APIDocs.json",
+            jq_schema=".[]",  # Iterate over each object in the array
+            metadata_func=self.metadata_func,
+            text_content=False  # Preserve JSON object as string in page_content
+        )
+
+        docs = loader.load()
+        for i, doc in enumerate(docs):
+            doc.metadata["doc_id"] = i  # or use a unique hash or UUID
+
+        # Split documents into smaller chunks for better retrieval
+        #yq In text_splitter.split_documents(docs), the page_content of each Document is what gets split.
+        #yq The metadata of each Document is kept in the metadata of each split Document.
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,      # Maximum chunk size in characters
+            chunk_overlap=200,    # Overlap between chunks to maintain context
+            add_start_index=True  # Add start index for better tracking
+        )
+        all_splits = text_splitter.split_documents(docs)
+        # print(f"number of chunks: {len(all_splits)}")
+        
+        # Optional: Filter complex metadata (commented out)
+        # filtered_splits = [filter_complex_metadata(doc) for doc in all_splits]
+        
+        # Initialize embedding model
+        embeddings = select_embeddings_model(model=embedding_model)
+
+        # Initialize or load Chroma vector database
+        vector_store = Chroma(embedding_function=embeddings, persist_directory="./chroma_db")
+
+        # Check if the vector store already has documents
+        existing_ids = vector_store.get()["ids"]  # Get the list of document IDs in the store
+
+        if not existing_ids:
+            # If no documents exist, embed and save them
+            ids = vector_store.add_documents(documents=all_splits)
+            # ids = vector_store.add_documents(documents=filtered_splits)  # Alternative
+            print(f"Added documents with {len(ids)} IDs.")
+        else:
+            # If documents exist, just load the existing store
+            # print(f"Loaded existing store with document IDs: {existing_ids}")
+            print(f"Loaded existing store with document IDs\n\n")
+
+        self.vector_store = vector_store
+
+    def metadata_func(self,record: dict, metadata: dict) -> dict:
         """
         Extract and process metadata from API documentation records.
         
@@ -298,99 +347,54 @@ def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='Open
                     metadata[key] = ""
         
         return metadata
-
-    # Load API documentation from JSON file
-    # file_path is the path to the API documentation JSON file
-    loader = JSONLoader(
-        file_path="APIDocs.json",
-        jq_schema=".[]",  # Iterate over each object in the array
-        metadata_func=metadata_func,
-        text_content=False  # Preserve JSON object as string in page_content
-    )
-
-    docs = loader.load()
-    for i, doc in enumerate(docs):
-        doc.metadata["doc_id"] = i  # or use a unique hash or UUID
-
-    # Split documents into smaller chunks for better retrieval
-    #yq In text_splitter.split_documents(docs), the page_content of each Document is what gets split.
-    #yq The metadata of each Document is kept in the metadata of each split Document.
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,      # Maximum chunk size in characters
-        chunk_overlap=200,    # Overlap between chunks to maintain context
-        add_start_index=True  # Add start index for better tracking
-    )
-    all_splits = text_splitter.split_documents(docs)
-    print(f"number of chunks: {len(all_splits)}")
     
-    # Optional: Filter complex metadata (commented out)
-    # filtered_splits = [filter_complex_metadata(doc) for doc in all_splits]
     
-    # Initialize embedding model
-    embeddings = select_embeddings_model(model=embedding_model)
-
-    # Initialize or load Chroma vector database
-    vector_store = Chroma(embedding_function=embeddings, persist_directory="./chroma_db")
-
-    # Check if the vector store already has documents
-    existing_ids = vector_store.get()["ids"]  # Get the list of document IDs in the store
-
-    if not existing_ids:
-        # If no documents exist, embed and save them
-        ids = vector_store.add_documents(documents=all_splits)
-        # ids = vector_store.add_documents(documents=filtered_splits)  # Alternative
-        print(f"Added documents with {len(ids)} IDs.")
-    else:
-        # If documents exist, just load the existing store
-        # print(f"Loaded existing store with document IDs: {existing_ids}")
-        print(f"Loaded existing store with document IDs")
-
-    # Define the prompt template for generating responses
-    prompt = ChatPromptTemplate.from_template(
-        "Answer the question based on the context: {context}\nQuestion: {question}\n")
-
-    # Perform similarity search to find relevant documents
-    question = query
-    retrieved_docs = vector_store.similarity_search(question)
-    
-    # Combine retrieved document content
-    docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
-    
-    #yq
-    return docs_content
+    def get_rag_document(self, query: str) -> str:
+        # Perform similarity search to find relevant documents
+        retrieved_docs = self.vector_store.similarity_search(query)
+        
+        # Combine retrieved document content
+        docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+        
+        #yq
+        return docs_content 
 
 
-    if False:
-        print(f"For question: {question}\n The retrieved documents are:\n")
-        for doc in retrieved_docs:
-            try:
-                # Parse the JSON string
-                parsed = json.loads(doc.page_content)
-                print(f"parsed: {parsed}")
-                # Extract and print the source_code with real newlines
-                print("source_code:")
-                print(parsed["source_code"])  # This will interpret \n as actual line breaks
-                print("--------------------------------")
-            except json.JSONDecodeError as e:
-                print("⚠️ JSON parse error:", e)
-                print("Raw doc.page_content:\n", doc.page_content)
-                print("--------------------------------")
+        if False:
+            print(f"For question: {question}\n The retrieved documents are:\n")
+            for doc in retrieved_docs:
+                try:
+                    # Parse the JSON string
+                    parsed = json.loads(doc.page_content)
+                    print(f"parsed: {parsed}")
+                    # Extract and print the source_code with real newlines
+                    print("source_code:")
+                    print(parsed["source_code"])  # This will interpret \n as actual line breaks
+                    print("--------------------------------")
+                except json.JSONDecodeError as e:
+                    print("⚠️ JSON parse error:", e)
+                    print("Raw doc.page_content:\n", doc.page_content)
+                    print("--------------------------------")
 
-    # Create the prompt with context and question
-    prompt_value = prompt.invoke({"question": question, "context": docs_content})
-    prompt_str = prompt_value.to_string()
+        # Define the prompt template for generating responses
+        prompt = ChatPromptTemplate.from_template(
+            "Answer the question based on the context: {context}\nQuestion: {question}\n")
+        
+        # Create the prompt with context and question
+        prompt_value = prompt.invoke({"question": question, "context": docs_content})
+        prompt_str = prompt_value.to_string()
 
-    # Initialize chat model and generate response
-    llm = select_chat_model(model=chat_model)
+        # Initialize chat model and generate response
+        llm = select_chat_model(model=chat_model)
 
-    try:
-        answer = llm.invoke(prompt_str)
-    except AttributeError:
-        # Fallback for older LangChain versions or misconfigured LLMs
-        answer = llm(prompt_str)
-    
-    print("\n\nget_RAG_document llm answer:", answer.content)  # Debug output (commented out)
-    return answer
+        try:
+            answer = llm.invoke(prompt_str)
+        except AttributeError:
+            # Fallback for older LangChain versions or misconfigured LLMs
+            answer = llm(prompt_str)
+        
+        print("\n\nget_RAG_document llm answer:", answer.content)  # Debug output (commented out)
+        return answer
 
 # =============================================================================
 # TESTING AND UTILITY FUNCTIONS

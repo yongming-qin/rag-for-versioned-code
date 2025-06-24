@@ -32,8 +32,13 @@ from typing import Dict, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import OpenAI
-from rag_unit import get_RAG_document
+from rag_unit import RagDocument
 from collections import defaultdict
+
+
+#yq Initialize the RagDocument
+rag_document = RagDocument()
+
 # =============================================================================
 # CONFIGURATION SECTION
 # =============================================================================
@@ -195,9 +200,22 @@ def check_api_usage(code: str, api_name: str) -> bool:
     """
     import re
     
-    # 如果API名称为空或代码为空，直接返回True
+    # 如果API名称为空或代码为空，直接返回False
     if not api_name or not code:
         return False
+    
+    # Extract the function name from a full signature if needed
+    fn_match = re.search(r'fn\s+(\w+)', api_name)
+    base_api_name = fn_match.group(1) if fn_match else api_name.split('::')[-1]
+
+    # Match just the function name usage
+    result = re.search(r'\b' + re.escape(base_api_name) + r'\b', code) is not None
+    print(f"check_api_usage result: {result=} {api_name=} {base_api_name=} {code=}")
+    
+    input()
+    return result
+
+    ############# original #############
     
     # 获取API的最后部分(函数/方法名)
     base_api_name = api_name.split('::')[-1] if '::' in api_name else api_name
@@ -328,7 +346,7 @@ def get_code_generation_prompt(query: str, api_info: Dict[str, Any], function_si
         str: Formatted prompt for code generation
     """
     # Retrieve relevant documentation using RAG
-    retrieved_docs = get_RAG_document(query)
+    retrieved_docs = rag_document.get_rag_document(query)
     
     prompt = f"""
     You are an expert Rust programmer. Write a Rust function implementation for the following task:
@@ -349,17 +367,51 @@ def get_code_generation_prompt(query: str, api_info: Dict[str, Any], function_si
     2. Make sure your code is compatible with relevant Rust version (must later than 1.71.0)
     3. Do not include tests, main function, or any code outside the required function.
     4. Do not include additional comments or explanations.
+    5. Import the necessary modules for the function implementation at the top of the file.
 
     Respond with ONLY the Rust function implementation, nothing else.    
 
-"""          
+"""
+    return prompt
+
+def get_code_generation_prompt_for_ground_truth(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+    prompt = f"""
+    You are an expert Rust programmer. Write a Rust function implementation for the following task:
+
+    Task Description:
+    {query}
+    """
+    return prompt
+
+def get_code_generation_prompt_no_rag(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+    prompt = f"""
+        You are an expert Rust programmer. Write a Rust function implementation for the following task:
+
+        Task Description:
+        {query}
+
+        Required Function Signature:
+        ```rust
+        {function_signature}
+        ```
+
+        Requirements:
+        1. Implement ONLY the function with the given signature, no additional functions.
+        2. Make sure your code is compatible with relevant Rust version (must later than 1.71.0)
+        3. Do not include tests, main function, or any code outside the required function.
+        4. Do not include additional comments or explanations.
+        5. Import the necessary modules for the function implementation at the top of the file.
+
+        Respond with ONLY the Rust function implementation, nothing else.    
+
+    """
     return prompt
 
 # =============================================================================
 # TASK PROCESSING FUNCTIONS
 # =============================================================================
 
-def process_task(task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api_key: str, base_url: str) -> Dict[str, Any]:
+def process_task(test_type: str, task_id: int, task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api_key: str, base_url: str) -> Dict[str, Any]:
     """
     Process a single task for a specific model with RAG enhancement.
     
@@ -387,13 +439,18 @@ def process_task(task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api
     function_signature = task_a.get("function_signature")
     test_program = task_a.get("test_program")
     
-    print(f"query: {query}\n--------------------------------\n")
+    print(f"query {task_id}: {query}\n--------------------------------\n")
     print(f"ground truth function_signature: {function_signature}\n--------------------------------\n")
     
     
     # Generate code using RAG-enhanced prompt
     #yq The below does use the task_b information to generate the prompt. which makes sense because the task_b can be seen as the ground truth
-    prompt = get_code_generation_prompt(query, task_b, function_signature)
+    if test_type == "no_rag":
+        prompt = get_code_generation_prompt_no_rag(query, task_b, function_signature)
+    elif test_type == "rag":
+        prompt = get_code_generation_prompt(query, task_b, function_signature)
+    elif test_type == "ground_truth":
+        prompt = get_code_generation_prompt_for_ground_truth(query, task_b, function_signature)
     raw_response = call_LLM(prompt, model, api_key, base_url)
     code = extract_rust_code(raw_response)
     print(f"llm generated code: {code}\n--------------------------------\n")
@@ -407,13 +464,13 @@ def process_task(task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api
         return result
     
     # Check API usage
-    api_name = task_b.get("name") #yq ground truth api name
-    if not check_api_usage(code, api_name):
-        #yq I guess this means the rag does not get the correct api chunks
-        result[f"RAG_{model}_code"] = "INCORRECT API"
-        result[f"RAG_{model}_test_result"] = "FAILED"
-        print(f"test result: {result[f'RAG_{model}_test_result']=}\n {result[f'RAG_{model}_code']=}")
-        return result
+    # api_name = task_b.get("name") #yq ground truth api name
+    # if not check_api_usage(code, api_name):
+    #     #yq I guess this means the rag does not get the correct api chunks
+    #     result[f"RAG_{model}_code"] = "INCORRECT API"
+    #     result[f"RAG_{model}_test_result"] = "FAILED"
+    #     print(f"test result: {result[f'RAG_{model}_test_result']=}\n {result[f'RAG_{model}_code']=}")
+    #     return result
     
     # Determine Rust version to use based on task information
     rust_version = "1.84.0"  # Default version
@@ -425,20 +482,60 @@ def process_task(task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api
     # Run test to validate the solution
     test_file = create_test_file(code, test_program)
     success, error_message = run_rust_test(test_file, rust_version)
-    print(f"test result: {success=}\n, compilation error: {error_message=}\n")
+    print(f"test result: {success=}, compilation error: {error_message=}\n")
+    
+    # if error_message contains something like rustup toolchain install 1.78.0-x86_64-unknown-linux-gnu
+    # run rustup toolchain install xx-unknown-linux-gnu with subprocess
+    if "rustup toolchain install" in error_message:
+        try:
+            # Extract and sanitize the toolchain name
+            match = re.search(r"rustup toolchain install ([^\s`'\"]+)", error_message)
+            if match:
+                rust_version = match.group(1)
+                subprocess.run(["rustup", "toolchain", "install", rust_version], check=True)
+                success, error_message = run_rust_test(test_file, rust_version)
+                print(f"test result: {success=}, compilation error: {error_message=}\n")
+            else:
+                print("Could not parse toolchain version from error message.")
+        except (subprocess.CalledProcessError, IndexError) as e:
+            print(f"Failed to install Rust toolchain {rust_version}: {e}")
+            # Continue with the original error
+    
     # Set result fields
-    result[f"RAG_{model}_code"] = code
-    result[f"RAG_{model}_test_result"] = "SUCCESS" if success else "FAILED"
-    result[f"RAG_{model}_error_message"] = error_message
+    result[f"rag_{model}_code"] = code
+    result[f"rag_{model}_test_result"] = "SUCCESS" if success else "FAILED"
+    result[f"rag_{model}_error_message"] = error_message
+    
+    # input("end of process_task")
     
     return result
+
+
+def print_summary_statistics(output_file, models: List[str]):
+    with open(output_file, 'r', encoding='utf-8') as f:
+        results = json.load(f)
+    # Calculate and print success rates per model
+    for model in models:
+        success_count = sum(1 for result in results if result.get(f"rag_{model}_test_result", "") == "SUCCESS")
+        success_rate = (success_count / len(results)) * 100 if results else 0
+        incorrect_sig = sum(1 for result in results if result.get(f"rag_{model}_code", "") == "INCORRECT SIG")
+        incorrect_api = sum(1 for result in results if result.get(f"rag_{model}_code", "") == "INCORRECT API")
+        incorrect_error_message = sum(1 for result in results if result.get(f"rag_{model}_error_message", "") != "")
+        
+        print(f"\nModel: {model}")
+        print(f"Success rate: {success_rate:.2f}% ({success_count}/{len(results)})")
+        print(f"Incorrect signatures: {incorrect_sig}")
+        print(f"Incorrect API usage: {incorrect_api}")
+        print(f"Incorrect error message: {incorrect_error_message}")
+        
 
 # =============================================================================
 # BATCH PROCESSING FUNCTIONS
 # =============================================================================
 
-def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str, str], models: List[str], 
-                      api_key: str, base_url: str, output_file: str, max_workers: int = 4):
+def process_all_models(test_type: str,
+                       file_a_data: List[Dict[str, Any]], file_b_data: Dict[str, str],
+                       models: List[str], api_key: str, base_url: str, output_file: str, max_workers: int = 4):
     """
     Process all tasks for all models in parallel with checkpoint support.
     
@@ -483,6 +580,7 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
         
     # 过滤出尚未处理的任务
     remaining_tasks = [task for task in file_a_data if task.get("task_idx") not in processed_task_ids]
+    remaining_tasks = remaining_tasks[:50]
     print(f"number of remaining tasks: {len(remaining_tasks)}")
     
     # Process tasks with progress tracking
@@ -501,7 +599,7 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
             # 为每个模型并行处理
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(process_task, task_a, task_b, model, api_key, base_url): model
+                    executor.submit(process_task, test_type, task_id, task_a, task_b, model, api_key, base_url): model
                     for model in models
                 }
                 
@@ -512,14 +610,16 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
                         # 更新任务结果，添加模型特定的字段
                         task_result[f"rag_{model}_code"] = model_result.get(f"rag_{model}_code")
                         task_result[f"rag_{model}_test_result"] = model_result.get(f"rag_{model}_test_result")
+                        task_result[f"rag_{model}_error_message"] = model_result.get(f"rag_{model}_error_message")
                     except Exception as e:
                         print("ERROR: " + str(e))
                         task_result[f"rag_{model}_code"] = f"ERROR: {str(e)}"
                         task_result[f"rag_{model}_test_result"] = "FAILED"
+                        task_result[f"rag_{model}_error_message"] = f"ERROR: {str(e)}"
                     finally:
                         pbar.update(1)
-                    tmp_code, tmp_test_result = task_result[f'rag_{model}_code'], task_result[f'rag_{model}_test_result']
-                    print(f"result {task_id=} {model=} {tmp_code=}, {tmp_test_result=}")
+                    tmp_code, tmp_test_result, tmp_error_message = task_result[f'rag_{model}_code'], task_result[f'rag_{model}_test_result'], task_result[f'rag_{model}_error_message']
+                    print(f"result {task_id=} {model=} {tmp_code=}, {tmp_test_result=}, {tmp_error_message=}")
                     print("================================================"*10)
             
             results.append(task_result)
@@ -536,17 +636,10 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
     # Print summary statistics
     print(f"\nProcessing complete. Results saved to: {output_file}")
     
-    # Calculate and print success rates per model
-    for model in models:
-        success_count = sum(1 for result in results if result.get(f"RAG_{model}_test_result", "") == "SUCCESS")
-        success_rate = (success_count / len(results)) * 100 if results else 0
-        incorrect_sig = sum(1 for result in results if result.get(f"RAG_{model}_code", "") == "INCORRECT SIG")
-        incorrect_api = sum(1 for result in results if result.get(f"RAG_{model}_code", "") == "INCORRECT API")
-        
-        print(f"\nModel: {model}")
-        print(f"Success rate: {success_rate:.2f}% ({success_count}/{len(results)})")
-        print(f"Incorrect signatures: {incorrect_sig}")
-        print(f"Incorrect API usage: {incorrect_api}")
+    print_summary_statistics(output_file, models)
+    
+
+
 
 # =============================================================================
 # MAIN EXECUTION FUNCTION
@@ -562,6 +655,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Evaluate LLM models on Rust API evolution tasks with RAG enhancement")
+    parser.add_argument("--test_type", required=True, choices=["no_rag", "rag", "ground_truth"], help="Type of test to run")
     parser.add_argument("--file_a", required=True, help="Input JSON file A with tasks and test programs")
     parser.add_argument("--file_b", required=True, help="Input JSON file B with API information")
     parser.add_argument("--output", required=True, help="Output JSON file for results")
@@ -575,8 +669,8 @@ def main():
     # Use provided API credentials if available
     api_key = args.api_key if args.api_key else API_KEY
     base_url = args.base_url if args.base_url else BASE_URL
-    print(f"api_key: {api_key}")
-    print(f"base_url: {base_url}")
+    # print(f"api_key: {api_key}")
+    # print(f"base_url: {base_url}")
     
     # Check if API key is provided
     if api_key == "your-api-key-here":
@@ -594,15 +688,21 @@ def main():
     except Exception as e:
         print(f"Error loading input files: {str(e)}")
         sys.exit(1)
+        
+    # print_summary_statistics(args.output, args.models)
     
     # Process all models with the complete evaluation pipeline
+    output_file = args.output.strip(".json") + f"_{args.test_type}.json"
+    print(f"output_file: {output_file}")
+    return
     process_all_models(
+        args.test_type,
         file_a_data, 
         file_b_data, 
         args.models, 
         api_key, 
         base_url, 
-        args.output, 
+        output_file, 
         args.max_workers
     )
 
