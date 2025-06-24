@@ -354,22 +354,22 @@ def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='Open
     
     # Combine retrieved document content
     docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
-    print(f"For question: {question}\n The retrieved documents are:\n")
-    for doc in retrieved_docs:
-        try:
-            # Parse the JSON string
-            parsed = json.loads(doc.page_content)
-            print(f"parsed: {parsed}")
-            # Extract and print the source_code with real newlines
-            print("source_code:")
-            print(parsed["source_code"])  # This will interpret \n as actual line breaks
-            print("--------------------------------")
-        except json.JSONDecodeError as e:
-            print("⚠️ JSON parse error:", e)
-            print("Raw doc.page_content:\n", doc.page_content)
-            print("--------------------------------")
+    if False:
+        print(f"For question: {question}\n The retrieved documents are:\n")
+        for doc in retrieved_docs:
+            try:
+                # Parse the JSON string
+                parsed = json.loads(doc.page_content)
+                print(f"parsed: {parsed}")
+                # Extract and print the source_code with real newlines
+                print("source_code:")
+                print(parsed["source_code"])  # This will interpret \n as actual line breaks
+                print("--------------------------------")
+            except json.JSONDecodeError as e:
+                print("⚠️ JSON parse error:", e)
+                print("Raw doc.page_content:\n", doc.page_content)
+                print("--------------------------------")
 
-    return
     # Create the prompt with context and question
     prompt_value = prompt.invoke({"question": question, "context": docs_content})
     prompt_str = prompt_value.to_string()

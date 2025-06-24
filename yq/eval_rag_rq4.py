@@ -40,18 +40,22 @@ from RAG_unit import get_RAG_document
 
 # List of LLM models to evaluate in the RAG-enhanced framework
 MODELS = [
-    "gpt-4o",                    # OpenAI's GPT-4 Omni model
+    "gpt-4.1-nano",
+    # "gpt-4o",                    # OpenAI's GPT-4 Omni model
     # "o1-mini",                 # Anthropic's o1-mini model (commented out)
-    "gemini-1.5-pro",           # Google's Gemini 1.5 Pro model
-    "claude-3-5-sonnet-20240620", # Anthropic's Claude 3.5 Sonnet
-    "qwen2.5-72b-instruct",     # Alibaba's Qwen 2.5 72B model
-    "Llama-3.1-70b",            # Meta's Llama 3.1 70B model
-    "deepseek-v3",              # DeepSeek's v3 model
-    "grok-3",                   # xAI's Grok-3 model
-    "claude-3-7-sonnet-20250219" # Anthropic's Claude 3.7 Sonnet
+    # "gemini-1.5-pro",           # Google's Gemini 1.5 Pro model
+    # "claude-3-5-sonnet-20240620", # Anthropic's Claude 3.5 Sonnet
+    # "qwen2.5-72b-instruct",     # Alibaba's Qwen 2.5 72B model
+    # "Llama-3.1-70b",            # Meta's Llama 3.1 70B model
+    # "deepseek-v3",              # DeepSeek's v3 model
+    # "grok-3",                   # xAI's Grok-3 model
+    # "claude-3-7-sonnet-20250219" # Anthropic's Claude 3.7 Sonnet
 ]
 
 # API configuration - can be set via environment variables or command line arguments
+# API_KEY = os.getenv('API_KEY', '')
+from dotenv import load_dotenv
+load_dotenv()
 API_KEY = os.getenv('API_KEY', '')
 BASE_URL = os.getenv('BASE_URL', '')
 
@@ -453,7 +457,7 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
                 results = json.load(f)
                 # 记录已经处理过的任务ID
                 for result in results:
-                    processed_task_ids.add(result.get("task_id", ""))
+                    processed_task_ids.add(result.get("task_idx"))
                 print(f"Loaded {len(results)} existing results from {output_file}")
     except Exception as e:
         print(f"Error loading existing results: {str(e)}")
@@ -461,16 +465,20 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
         results = []
         processed_task_ids = set()
     
+    print(f"processed_task_ids: {processed_task_ids}")
     # 创建任务ID到task_b数据的映射，以便快速查找
-    task_b_mapping = {item.get("task_id", ""): item for item in file_b_data}
-    
+    #yq api documentation
+    task_b_mapping = {idx + 1: item for idx, item in enumerate(file_b_data)}
+    print(f"length of task_b_mapping: {len(task_b_mapping)}")
+        
     # 过滤出尚未处理的任务
-    remaining_tasks = [task for task in file_a_data if task.get("task_id", "") not in processed_task_ids]
-
+    remaining_tasks = [task for task in file_a_data if task.get("task_idx") not in processed_task_ids]
+    print(f"number of remaining tasks: {len(remaining_tasks)}")
+    
     # Process tasks with progress tracking
     with tqdm(total=len(remaining_tasks) * len(models), desc="Processing tasks") as pbar:
         for task_a in remaining_tasks:
-            task_id = task_a.get("task_id", "")
+            task_id = task_a.get("task_idx")
             
             # 跳过没有匹配的task_b的任务
             if task_id not in task_b_mapping:
@@ -492,8 +500,8 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
                     try:
                         model_result = future.result()
                         # 更新任务结果，添加模型特定的字段
-                        task_result[f"RAG_{model}_code"] = model_result.get(f"RAG_{model}_code", "")
-                        task_result[f"RAG_{model}_test_result"] = model_result.get(f"RAG_{model}_test_result", "FAILED")
+                        task_result[f"RAG_{model}_code"] = model_result.get(f"RAG_{model}_code")
+                        task_result[f"RAG_{model}_test_result"] = model_result.get(f"RAG_{model}_test_result")
                     except Exception as e:
                         print("ERROR: " + str(e))
                         task_result[f"RAG_{model}_code"] = f"ERROR: {str(e)}"
@@ -567,7 +575,7 @@ def main():
         with open(args.file_b, "r", encoding="utf-8") as f:
             file_b_data = json.load(f)
             
-        print(f"Loaded {len(file_a_data)} tasks from file A and {len(file_b_data)} API entries from file B")
+        print(f"Loaded {len(file_a_data)} tasks from file A with tasks and test programs and {len(file_b_data)} API entries from file B with API information")
     except Exception as e:
         print(f"Error loading input files: {str(e)}")
         sys.exit(1)
