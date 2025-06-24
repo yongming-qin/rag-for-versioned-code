@@ -32,8 +32,8 @@ from typing import Dict, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import OpenAI
-from yq.rag_unit import get_RAG_document
-
+from rag_unit import get_RAG_document
+from collections import defaultdict
 # =============================================================================
 # CONFIGURATION SECTION
 # =============================================================================
@@ -56,8 +56,8 @@ MODELS = [
 # API_KEY = os.getenv('API_KEY', '')
 from dotenv import load_dotenv
 load_dotenv()
-API_KEY = os.getenv('API_KEY', '')
-BASE_URL = os.getenv('BASE_URL', '')
+API_KEY = os.getenv('OPENAI_API_KEY')
+BASE_URL = os.getenv('OPENAI_BASE_URL')
 
 # =============================================================================
 # CORE LLM INTERACTION FUNCTIONS
@@ -87,7 +87,6 @@ def call_LLM(prompt: str, model: str, api_key: str, base_url: str) -> str:
             temperature=0.7,  # Moderate creativity for code generation
         )        
         code = response.choices[0].message.content.strip()
-        print(f"\n==== 原始响应 ====\n{code[:300]}...\n")
         return code
         
     except Exception as e:
@@ -384,42 +383,53 @@ def process_task(task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api
     result = task_a.copy()  # Start with a copy of the original task_a data
     
     # Extract required fields
-    query = task_a.get("query", "")
-    function_signature = task_a.get("function_signature", "")
-    test_program = task_a.get("test_program", "")
+    query = task_a.get("query")
+    function_signature = task_a.get("function_signature")
+    test_program = task_a.get("test_program")
+    
+    print(f"query: {query}\n--------------------------------\n")
+    print(f"ground truth function_signature: {function_signature}\n--------------------------------\n")
+    
     
     # Generate code using RAG-enhanced prompt
+    #yq The below does use the task_b information to generate the prompt. which makes sense because the task_b can be seen as the ground truth
     prompt = get_code_generation_prompt(query, task_b, function_signature)
     raw_response = call_LLM(prompt, model, api_key, base_url)
     code = extract_rust_code(raw_response)
+    print(f"llm generated code: {code}\n--------------------------------\n")
     
     # Check function signature
     if not check_function_signature(code, function_signature):
+        #yq I guess this means the rag does not get the correct function signature
         result[f"RAG_{model}_code"] = "INCORRECT SIG"
         result[f"RAG_{model}_test_result"] = "FAILED"
+        print(f"test result: {result[f'RAG_{model}_test_result']=}\n {result[f'RAG_{model}_code']=}")
         return result
     
     # Check API usage
-    api_name = task_b.get("name", "")
+    api_name = task_b.get("name") #yq ground truth api name
     if not check_api_usage(code, api_name):
+        #yq I guess this means the rag does not get the correct api chunks
         result[f"RAG_{model}_code"] = "INCORRECT API"
         result[f"RAG_{model}_test_result"] = "FAILED"
+        print(f"test result: {result[f'RAG_{model}_test_result']=}\n {result[f'RAG_{model}_code']=}")
         return result
     
     # Determine Rust version to use based on task information
     rust_version = "1.84.0"  # Default version
     if "crate" not in task_b:
-        to_version = task_b.get("to_version", "")
+        to_version = task_b.get("to_version")
         if to_version:
             rust_version = to_version
     
     # Run test to validate the solution
     test_file = create_test_file(code, test_program)
     success, error_message = run_rust_test(test_file, rust_version)
-    
+    print(f"test result: {success=}\n, compilation error: {error_message=}\n")
     # Set result fields
     result[f"RAG_{model}_code"] = code
     result[f"RAG_{model}_test_result"] = "SUCCESS" if success else "FAILED"
+    result[f"RAG_{model}_error_message"] = error_message
     
     return result
 
@@ -500,19 +510,22 @@ def process_all_models(file_a_data: List[Dict[str, Any]], file_b_data: Dict[str,
                     try:
                         model_result = future.result()
                         # 更新任务结果，添加模型特定的字段
-                        task_result[f"RAG_{model}_code"] = model_result.get(f"RAG_{model}_code")
-                        task_result[f"RAG_{model}_test_result"] = model_result.get(f"RAG_{model}_test_result")
+                        task_result[f"rag_{model}_code"] = model_result.get(f"rag_{model}_code")
+                        task_result[f"rag_{model}_test_result"] = model_result.get(f"rag_{model}_test_result")
                     except Exception as e:
                         print("ERROR: " + str(e))
-                        task_result[f"RAG_{model}_code"] = f"ERROR: {str(e)}"
-                        task_result[f"RAG_{model}_test_result"] = "FAILED"
+                        task_result[f"rag_{model}_code"] = f"ERROR: {str(e)}"
+                        task_result[f"rag_{model}_test_result"] = "FAILED"
                     finally:
                         pbar.update(1)
+                    tmp_code, tmp_test_result = task_result[f'rag_{model}_code'], task_result[f'rag_{model}_test_result']
+                    print(f"result {task_id=} {model=} {tmp_code=}, {tmp_test_result=}")
+                    print("================================================"*10)
             
             results.append(task_result)
             
             # 每处理10个任务保存一次检查点
-            if len(results) % 10 == 0:
+            if len(results) % 5 == 0:
                 with open(output_file, 'w', encoding='utf-8') as f:
                     json.dump(results, f, indent=2, ensure_ascii=False)
     
@@ -562,6 +575,8 @@ def main():
     # Use provided API credentials if available
     api_key = args.api_key if args.api_key else API_KEY
     base_url = args.base_url if args.base_url else BASE_URL
+    print(f"api_key: {api_key}")
+    print(f"base_url: {base_url}")
     
     # Check if API key is provided
     if api_key == "your-api-key-here":

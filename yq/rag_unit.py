@@ -321,6 +321,7 @@ def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='Open
         add_start_index=True  # Add start index for better tracking
     )
     all_splits = text_splitter.split_documents(docs)
+    print(f"number of chunks: {len(all_splits)}")
     
     # Optional: Filter complex metadata (commented out)
     # filtered_splits = [filter_complex_metadata(doc) for doc in all_splits]
@@ -354,6 +355,11 @@ def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='Open
     
     # Combine retrieved document content
     docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+    
+    #yq
+    return docs_content
+
+
     if False:
         print(f"For question: {question}\n The retrieved documents are:\n")
         for doc in retrieved_docs:
@@ -383,7 +389,7 @@ def get_RAG_document(query: str = "", embedding_model="OpenAI", chat_model='Open
         # Fallback for older LangChain versions or misconfigured LLMs
         answer = llm(prompt_str)
     
-    print("\n\nanswer:", answer.content)  # Debug output (commented out)
+    print("\n\nget_RAG_document llm answer:", answer.content)  # Debug output (commented out)
     return answer
 
 # =============================================================================

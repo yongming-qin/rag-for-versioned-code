@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import Dict, Any, List
 from unit import call_LLM, run_rust_code, get_test_program_prompt, get_code_solution_prompt
-from yq.rag_unit import get_RAG_document
+from rag_unit import get_RAG_document
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
