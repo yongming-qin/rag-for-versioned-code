@@ -68,7 +68,7 @@ BASE_URL = os.getenv('OPENAI_BASE_URL')
 # CORE LLM INTERACTION FUNCTIONS
 # =============================================================================
 
-def call_LLM(prompt: str, model: str, api_key: str, base_url: str) -> str:
+def call_llm(prompt: str, model: str, api_key: str, base_url: str) -> str:
     """
     Call the LLM API and return the response.
     
@@ -327,7 +327,7 @@ def run_rust_test(test_file_content: str, rust_version: str = "1.84.0") -> Tuple
 # PROMPT GENERATION FUNCTIONS
 # =============================================================================
 
-def get_code_generation_prompt(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+def get_code_generation_prompt_rag(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
     """
     Create a prompt for code generation with RAG-enhanced context.
     
@@ -376,10 +376,28 @@ def get_code_generation_prompt(query: str, api_info: Dict[str, Any], function_si
 
 def get_code_generation_prompt_for_ground_truth(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
     prompt = f"""
-    You are an expert Rust programmer. Write a Rust function implementation for the following task:
+        You are an expert Rust programmer. Write a Rust function implementation for the following task:
 
-    Task Description:
-    {query}
+        Task Description:
+        {query}
+
+        Required Function Signature:
+        ```rust
+        {function_signature}
+        ```
+        
+        Retrieved Documentation:
+        {api_info}
+
+        Requirements:
+        1. Implement ONLY the function with the given signature, no additional functions.
+        2. Make sure your code is compatible with relevant Rust version (must later than 1.71.0)
+        3. Do not include tests, main function, or any code outside the required function.
+        4. Do not include additional comments or explanations.
+        5. Import the necessary modules for the function implementation at the top of the file.
+
+        Respond with ONLY the Rust function implementation, nothing else.    
+
     """
     return prompt
 
@@ -448,10 +466,10 @@ def process_task(test_type: str, task_id: int, task_a: Dict[str, Any], task_b: D
     if test_type == "no_rag":
         prompt = get_code_generation_prompt_no_rag(query, task_b, function_signature)
     elif test_type == "rag":
-        prompt = get_code_generation_prompt(query, task_b, function_signature)
+        prompt = get_code_generation_prompt_rag(query, task_b, function_signature)
     elif test_type == "ground_truth":
         prompt = get_code_generation_prompt_for_ground_truth(query, task_b, function_signature)
-    raw_response = call_LLM(prompt, model, api_key, base_url)
+    raw_response = call_llm(prompt, model, api_key, base_url)
     code = extract_rust_code(raw_response)
     print(f"llm generated code: {code}\n--------------------------------\n")
     
@@ -692,9 +710,9 @@ def main():
     # print_summary_statistics(args.output, args.models)
     
     # Process all models with the complete evaluation pipeline
-    output_file = args.output.strip(".json") + f"_{args.test_type}.json"
+    output_file = args.output.split(".")[0] + f"_{args.test_type}.json"
     print(f"output_file: {output_file}")
-    return
+
     process_all_models(
         args.test_type,
         file_a_data, 
