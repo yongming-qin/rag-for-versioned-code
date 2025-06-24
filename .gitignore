@@ -162,8 +162,8 @@ service_account.json
 
 # Large data files
 *.csv
-*.json
-*.jsonl
+# *.json
+# *.jsonl
 *.parquet
 *.feather
 *.arrow

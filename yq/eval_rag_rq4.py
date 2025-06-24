@@ -32,7 +32,7 @@ from typing import Dict, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import OpenAI
-from RAG_unit import get_RAG_document
+from yq.rag_unit import get_RAG_document
 
 # =============================================================================
 # CONFIGURATION SECTION
