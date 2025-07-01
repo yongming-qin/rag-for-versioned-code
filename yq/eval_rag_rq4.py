@@ -36,9 +36,6 @@ from rag_unit import RagDocument
 from collections import defaultdict
 
 
-#yq Initialize the RagDocument
-rag_document = RagDocument()
-
 # =============================================================================
 # CONFIGURATION SECTION
 # =============================================================================
@@ -89,7 +86,10 @@ def call_llm(prompt: str, model: str, api_key: str, base_url: str) -> str:
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,  # Moderate creativity for code generation
+            temperature=0.0,  # the following are for deterministic output
+            top_p=1.0,
+            frequency_penalty=0.0,
+            presence_penalty=0.0,
         )        
         code = response.choices[0].message.content.strip()
         return code
@@ -327,7 +327,7 @@ def run_rust_test(test_file_content: str, rust_version: str = "1.84.0") -> Tuple
 # PROMPT GENERATION FUNCTIONS
 # =============================================================================
 
-def get_code_generation_prompt_rag(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+def get_code_generation_prompt_rag(query: str, retrieved_docs: str, function_signature: str) -> str:
     """
     Create a prompt for code generation with RAG-enhanced context.
     
@@ -345,9 +345,6 @@ def get_code_generation_prompt_rag(query: str, api_info: Dict[str, Any], functio
     Returns:
         str: Formatted prompt for code generation
     """
-    # Retrieve relevant documentation using RAG
-    retrieved_docs = rag_document.get_rag_document(query)
-    
     prompt = f"""
     You are an expert Rust programmer. Write a Rust function implementation for the following task:
 
@@ -375,6 +372,7 @@ def get_code_generation_prompt_rag(query: str, api_info: Dict[str, Any], functio
     return prompt
 
 def get_code_generation_prompt_for_ground_truth(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+    ##todo the api_info is not the ground truth api info
     prompt = f"""
         You are an expert Rust programmer. Write a Rust function implementation for the following task:
 
@@ -401,7 +399,7 @@ def get_code_generation_prompt_for_ground_truth(query: str, api_info: Dict[str, 
     """
     return prompt
 
-def get_code_generation_prompt_no_rag(query: str, api_info: Dict[str, Any], function_signature: str) -> str:
+def get_code_generation_prompt_no_rag(query: str, function_signature: str) -> str:
     prompt = f"""
         You are an expert Rust programmer. Write a Rust function implementation for the following task:
 
@@ -429,7 +427,7 @@ def get_code_generation_prompt_no_rag(query: str, api_info: Dict[str, Any], func
 # TASK PROCESSING FUNCTIONS
 # =============================================================================
 
-def process_task(test_type: str, task_id: int, task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api_key: str, base_url: str) -> Dict[str, Any]:
+def process_task(test_type: str, rag_document: RagDocument, task_id: int, task_a: Dict[str, Any], task_b: Dict[str, Any], model: str, api_key: str, base_url: str) -> Dict[str, Any]:
     """
     Process a single task for a specific model with RAG enhancement.
     
@@ -464,9 +462,11 @@ def process_task(test_type: str, task_id: int, task_a: Dict[str, Any], task_b: D
     # Generate code using RAG-enhanced prompt
     #yq The below does use the task_b information to generate the prompt. which makes sense because the task_b can be seen as the ground truth
     if test_type == "no_rag":
-        prompt = get_code_generation_prompt_no_rag(query, task_b, function_signature)
+        prompt = get_code_generation_prompt_no_rag(query, function_signature)
     elif test_type == "rag":
-        prompt = get_code_generation_prompt_rag(query, task_b, function_signature)
+        # Retrieve relevant documentation using RAG
+        retrieved_docs = rag_document.get_rag_document(query)
+        prompt = get_code_generation_prompt_rag(query, retrieved_docs, function_signature)
     elif test_type == "ground_truth":
         prompt = get_code_generation_prompt_for_ground_truth(query, task_b, function_signature)
     raw_response = call_llm(prompt, model, api_key, base_url)
@@ -575,6 +575,9 @@ def process_all_models(test_type: str,
     results = []
     processed_task_ids = set()
     
+    #yq Initialize the RagDocument
+    rag_document = RagDocument()
+    
     # 检查输出文件是否存在，如果存在则加载已有结果
     try:
         if os.path.exists(output_file):
@@ -617,7 +620,7 @@ def process_all_models(test_type: str,
             # 为每个模型并行处理
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(process_task, test_type, task_id, task_a, task_b, model, api_key, base_url): model
+                    executor.submit(process_task, test_type, rag_document, task_id, task_a, task_b, model, api_key, base_url): model
                     for model in models
                 }
                 
@@ -707,11 +710,12 @@ def main():
         print(f"Error loading input files: {str(e)}")
         sys.exit(1)
         
-    # print_summary_statistics(args.output, args.models)
     
     # Process all models with the complete evaluation pipeline
     output_file = args.output.split(".")[0] + f"_{args.test_type}.json"
     print(f"output_file: {output_file}")
+
+    # print_summary_statistics(output_file, args.models)
 
     process_all_models(
         args.test_type,

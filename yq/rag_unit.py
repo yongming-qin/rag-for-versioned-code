@@ -357,7 +357,7 @@ class RagDocument:
         docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
         
         #yq
-        return docs_content 
+        return docs_content
 
 
         if False:
